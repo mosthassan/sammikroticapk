@@ -1,0 +1,94 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper function to check if request is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Helper to check user membership in the organization
+    function isMemberOf(orgId) {
+      return isAuthenticated() && 
+        (request.auth.token.orgId == orgId || 
+         exists(/databases/$(database)/documents/orgs/$(orgId)/members/$(request.auth.uid)));
+    }
+
+    // Helper to get user role in organization
+    function getUserRole(orgId) {
+      return get(/databases/$(database)/documents/orgs/$(orgId)/members/$(request.auth.uid)).data.role;
+    }
+
+    function isOwner(orgId) {
+      return isMemberOf(orgId) && getUserRole(orgId) == 'OWNER';
+    }
+
+    function isAccountantOrHigher(orgId) {
+      return isMemberOf(orgId) && (getUserRole(orgId) in ['OWNER', 'ACCOUNTANT']);
+    }
+
+    match /orgs/{orgId} {
+      allow read: if isMemberOf(orgId);
+      allow write: if isOwner(orgId);
+
+      // 1. Journal entries & lines: STRICTLY APPEND-ONLY (No updates, no deletions)
+      match /journal_entries/{entryId} {
+        allow read: if isMemberOf(orgId);
+        allow create: if isAccountantOrHigher(orgId);
+        allow update, delete: if false; // IMMUTABLE LEDGER
+      }
+
+      match /journal_lines/{lineId} {
+        allow read: if isMemberOf(orgId);
+        allow create: if isAccountantOrHigher(orgId);
+        allow update, delete: if false; // IMMUTABLE LEDGER
+      }
+
+      // 2. Documents (Invoices, Vouchers): Created by Cashier/Accountant, no hard deletes
+      match /documents/{docId} {
+        allow read: if isMemberOf(orgId);
+        allow create: if isMemberOf(orgId);
+        allow update: if isAccountantOrHigher(orgId);
+        allow delete: if false; // Tombstone / reversal only
+      }
+
+      // 3. Allocations: Append-only or voided flag
+      match /allocations/{allocId} {
+        allow read: if isMemberOf(orgId);
+        allow create: if isMemberOf(orgId);
+        allow update: if isAccountantOrHigher(orgId);
+        allow delete: if false;
+      }
+
+      // 4. Master Data (Parties, Packages, Treasuries)
+      match /parties/{partyId} {
+        allow read: if isMemberOf(orgId);
+        allow write: if isMemberOf(orgId);
+      }
+
+      match /card_packages/{pkgId} {
+        allow read: if isMemberOf(orgId);
+        allow write: if isAccountantOrHigher(orgId);
+      }
+
+      match /treasury_accounts/{treasuryId} {
+        allow read: if isMemberOf(orgId);
+        allow write: if isOwner(orgId);
+      }
+
+      // 5. Fiscal Periods: Closing & opening restricted to Accountant/Owner
+      match /fiscal_periods/{periodId} {
+        allow read: if isMemberOf(orgId);
+        allow update: if isAccountantOrHigher(orgId);
+        allow create, delete: if isOwner(orgId);
+      }
+
+      // 6. Audit Log: Append-only for all security tracking
+      match /audit_log/{logId} {
+        allow read: if isOwner(orgId);
+        allow create: if isMemberOf(orgId);
+        allow update, delete: if false;
+      }
+    }
+  }
+}
