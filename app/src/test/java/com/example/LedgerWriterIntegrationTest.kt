@@ -540,4 +540,67 @@ class LedgerWriterIntegrationTest {
             invariants.verifyAll()
         }
     }
+
+    /**
+     * Test 12:
+     * إلغاء وعكس فاتورة مشتريات مكررة بها أصول ثابتة ←
+     * 1. ينشأ قيد عكسي تعويضي يعكس ذمم المورد وحساب الأصول.
+     * 2. يتم حذف الأصل المرتبط بالفاتورة تلقائياً من جدول الأصول.
+     * 3. حالة الفاتورة تصبح VOIDED.
+     * 4. ميزان المراجعة والقيود تظل متزنة تماماً وفق IFRS.
+     */
+    @Test
+    fun testVoidPurchaseInvoiceRevertsAccountsAndDeletesAssets() {
+        runBlocking {
+            val vendor = PartyEntity("VENDOR_TEST_1", "السلطان تك للكمبيوتر", isVendor = true)
+            db.partyDao().insertParty(vendor)
+
+            val rate = ExchangeRate.parity(CurrencyCode.YER)
+            val purchaseInv = writer.postPurchaseInvoice(
+                vendorPartyId = vendor.id,
+                fiscalYear = 2026,
+                dateEpochDay = 20005L,
+                currency = CurrencyCode.YER,
+                exchangeRate = rate,
+                items = listOf(
+                    PurchaseItemSpec(
+                        description = "أكسس بوينت Ubiquiti Rocket M5",
+                        accountCode = AccountConstants.FIXED_ASSETS_NETWORK,
+                        quantity = 1,
+                        unitPriceMinor = 15000000L, // 150,000 YER
+                        isAsset = true,
+                        usefulLifeMonths = 36
+                    )
+                ),
+                notes = "فاتورة مشتريات تجريبية"
+            )
+
+            // Verify initial state
+            assertEquals(1, db.assetDao().getAllAssetsSync().size)
+            assertEquals(15000000L, db.journalDao().getNetDebitBalanceForAccount(AccountConstants.FIXED_ASSETS_NETWORK))
+            assertEquals(-15000000L, db.journalDao().getNetDebitBalanceForAccount(AccountConstants.ACCOUNTS_PAYABLE))
+
+            // Now void the duplicate purchase invoice
+            val voidSuccess = writer.voidDocument(purchaseInv.id, 20006L, "فاتورة مكررة بناء على طلب المستخدم")
+            assertTrue(voidSuccess)
+
+            // 1. Fixed asset account must revert to 0
+            assertEquals(0L, db.journalDao().getNetDebitBalanceForAccount(AccountConstants.FIXED_ASSETS_NETWORK))
+
+            // 2. Accounts payable must revert to 0
+            assertEquals(0L, db.journalDao().getNetDebitBalanceForAccount(AccountConstants.ACCOUNTS_PAYABLE))
+
+            // 3. Document status is VOIDED
+            val updatedDoc = db.documentDao().getDocumentById(purchaseInv.id)
+            assertNotNull(updatedDoc)
+            assertEquals("VOIDED", updatedDoc!!.status)
+
+            // 4. Asset must be deleted from assets table
+            val remainingAssets = db.assetDao().getAllAssetsSync()
+            assertTrue("Expected assets list to be empty after voiding", remainingAssets.isEmpty())
+
+            // 5. Invariants must verify cleanly
+            invariants.verifyAll()
+        }
+    }
 }

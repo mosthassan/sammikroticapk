@@ -378,6 +378,9 @@ interface AssetDao {
     @Query("UPDATE assets SET isDisposed = :isDisposed WHERE id = :id")
     suspend fun setAssetDisposed(id: String, isDisposed: Boolean)
 
+    @Query("DELETE FROM assets WHERE docId = :docId")
+    suspend fun deleteAssetsByDocId(docId: String)
+
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insertDepreciationRun(run: DepreciationRunEntity)
 

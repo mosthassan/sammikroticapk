@@ -3,6 +3,10 @@ package com.example.ui.viewmodel
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateListOf
 import com.example.core.ledger.AccountConstants
 import com.example.core.model.CurrencyCode
 import com.example.core.model.ExchangeRate
@@ -35,6 +39,13 @@ import com.example.domain.usecase.ImportBatchReport
 import com.example.domain.usecase.IncomeStatementReport
 import com.example.domain.usecase.StatementOfAccountReport
 import com.example.domain.usecase.StatementOfAccountUseCase
+import com.example.data.local.entity.NetworkDeviceEntity
+import com.example.data.local.entity.NetworkSubnetSettingsEntity
+import com.example.domain.network.NetworkProtectionValidator
+import com.example.domain.network.IpValidationResult
+import com.example.util.JsonBackupHelper
+import com.example.util.SalesDraftManager
+import com.example.core.model.UuidUtils
 import com.example.BuildConfig
 import com.example.domain.ai.AccountingAssistantUseCase
 import com.example.domain.ai.AnomalyDetectionUseCase
@@ -148,6 +159,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     val allAccounts: StateFlow<List<AccountEntity>> = repository.allAccounts
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    val allDevices: StateFlow<List<NetworkDeviceEntity>> = db.networkDeviceDao().getAllDevices()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val subnetSettings: StateFlow<NetworkSubnetSettingsEntity?> = db.networkSubnetSettingsDao().getSubnetSettings()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
     // Dashboard State
     val selectedPeriodFilter = MutableStateFlow(PeriodFilter.THIS_MONTH)
 
@@ -177,6 +194,23 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     init {
         refreshDashboard()
         runInvariantCheck()
+
+        // Restore persistent sales invoice draft (survives app switching, WhatsApp, & process death)
+        try {
+            val savedDraft = SalesDraftManager.loadDraft(getApplication())
+            if (savedDraft != null && savedDraft.items.isNotEmpty()) {
+                draftSalesPartyId = savedDraft.partyId
+                draftSalesCustomerSearch = savedDraft.customerSearch
+                draftSalesNotes = savedDraft.notes
+                draftSalesPaymentType = savedDraft.paymentType
+                draftSalesPaidMinor = savedDraft.paidMinor
+                draftSalesItems.clear()
+                draftSalesItems.addAll(savedDraft.items)
+                showCreateSalesInvoiceDialog = savedDraft.isOpen
+            }
+        } catch (e: Exception) {
+            // Ignore error on startup
+        }
     }
 
     fun refreshDashboard() {
@@ -877,4 +911,315 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             viewModelScope.launch { _userMessage.emit("تم تفعيل قفل PIN (الرمز: 1234)") }
         }
     }
+
+    // ==========================================
+    // Network Devices & Protection Operations
+    // ==========================================
+
+    fun validateIp(targetIp: String, currentDeviceId: String?): IpValidationResult {
+        return NetworkProtectionValidator.validateDeviceIp(
+            targetIp = targetIp,
+            currentDeviceId = currentDeviceId,
+            existingDevices = allDevices.value,
+            settings = subnetSettings.value
+        )
+    }
+
+    fun saveNetworkDevice(device: NetworkDeviceEntity, onSuccess: () -> Unit) {
+        viewModelScope.launch {
+            try {
+                val existing = db.networkDeviceDao().getDeviceById(device.id)
+                if (existing != null) {
+                    db.networkDeviceDao().updateDevice(device)
+                    _userMessage.emit("تم تحديث بيانات جهاز الشبكة (${device.name}) بنجاح")
+                } else {
+                    db.networkDeviceDao().insertDevice(device)
+                    _userMessage.emit("تمت إضافة جهاز الشبكة (${device.name}) بنجاح")
+                }
+                onSuccess()
+            } catch (e: Exception) {
+                _userMessage.emit("خطأ في حفظ الجهاز: ${e.message}")
+            }
+        }
+    }
+
+    fun deleteNetworkDevice(deviceId: String, onSuccess: () -> Unit) {
+        viewModelScope.launch {
+            try {
+                db.networkDeviceDao().deleteDeviceById(deviceId)
+                _userMessage.emit("تم حذف الجهاز بنجاح")
+                onSuccess()
+            } catch (e: Exception) {
+                _userMessage.emit("خطأ في حذف الجهاز: ${e.message}")
+            }
+        }
+    }
+
+    fun updateSubnetSettings(settings: NetworkSubnetSettingsEntity, onSuccess: () -> Unit) {
+        viewModelScope.launch {
+            try {
+                db.networkSubnetSettingsDao().update(settings)
+                _userMessage.emit("تم تحديث إعدادات رنجات وحماية الشبكة بنجاح")
+                onSuccess()
+            } catch (e: Exception) {
+                _userMessage.emit("خطأ في تحديث إعدادات الشبكة: ${e.message}")
+            }
+        }
+    }
+
+    // ==========================================
+    // JSON Bulk Export & Import Operations
+    // ==========================================
+
+    fun importCustomersFromJson(jsonStr: String, onSuccess: (Int) -> Unit, onError: (String) -> Unit) {
+        viewModelScope.launch {
+            val result = JsonBackupHelper.parseCustomersFromJson(jsonStr)
+            result.fold(
+                onSuccess = { parties ->
+                    var count = 0
+                    parties.forEach { p ->
+                        db.partyDao().insertParty(p)
+                        count++
+                    }
+                    _userMessage.emit("تم استيراد $count عميل/طرف بنجاح من ملف JSON")
+                    onSuccess(count)
+                },
+                onFailure = { err ->
+                    val msg = err.message ?: "خطأ في قراءة بيانات JSON"
+                    _userMessage.emit("فشل الاستيراد: $msg")
+                    onError(msg)
+                }
+            )
+        }
+    }
+
+    fun importDevicesFromJson(jsonStr: String, onSuccess: (Int) -> Unit, onError: (String) -> Unit) {
+        viewModelScope.launch {
+            val result = JsonBackupHelper.parseDevicesFromJson(jsonStr)
+            result.fold(
+                onSuccess = { devices ->
+                    var count = 0
+                    devices.forEach { dev ->
+                        val res = db.networkDeviceDao().insertDevice(dev)
+                        if (res > 0L) count++
+                    }
+                    _userMessage.emit("تم استيراد $count جهاز شبكة بنجاح من ملف JSON")
+                    onSuccess(count)
+                },
+                onFailure = { err ->
+                    val msg = err.message ?: "خطأ في قراءة بيانات JSON للأجهزة"
+                    _userMessage.emit("فشل استيراد الأجهزة: $msg")
+                    onError(msg)
+                }
+            )
+        }
+    }
+
+    fun importPurchasesFromJson(jsonStr: String, onSuccess: (Int) -> Unit, onError: (String) -> Unit) {
+        viewModelScope.launch {
+            val result = JsonBackupHelper.parsePurchasesFromJson(jsonStr)
+            result.fold(
+                onSuccess = { invoices ->
+                    var count = 0
+                    invoices.forEach { inv ->
+                        try {
+                            var vendor = allParties.value.firstOrNull { it.name.trim().equals(inv.supplierName.trim(), ignoreCase = true) }
+                            if (vendor == null) {
+                                val newVendor = PartyEntity(
+                                    id = UuidUtils.newTimeOrderedId(),
+                                    name = inv.supplierName,
+                                    isVendor = true,
+                                    isActive = true
+                                )
+                                db.partyDao().insertParty(newVendor)
+                                vendor = newVendor
+                            }
+
+                            val currency = CurrencyCode.fromString(inv.currency)
+                            val rate = if (currency == CurrencyCode.FUNCTIONAL) ExchangeRate.parity(CurrencyCode.FUNCTIONAL) else ExchangeRate(currency, CurrencyCode.FUNCTIONAL, 530_000_000L)
+
+                            val specs = inv.items.map { itm ->
+                                val code = if (itm.isFixedAsset) AccountConstants.FIXED_ASSETS_NETWORK else AccountConstants.OPERATING_EXPENSES
+                                PurchaseItemSpec(
+                                    description = itm.description,
+                                    accountCode = code,
+                                    quantity = itm.quantity,
+                                    unitPriceMinor = itm.unitPriceMinor,
+                                    isAsset = itm.isFixedAsset,
+                                    usefulLifeMonths = itm.usefulLifeMonths
+                                )
+                            }
+
+                            postPurchaseInvoice(
+                                vendorPartyId = vendor.id,
+                                currency = currency,
+                                exchangeRate = rate,
+                                items = specs,
+                                notes = "استيراد JSON: ${inv.notes}".trim()
+                            ) {}
+                            count++
+                        } catch (e: Exception) {
+                            // Continue
+                        }
+                    }
+                    _userMessage.emit("تم استيراد وترحيل $count فاتورة مشتريات بنجاح من ملف JSON")
+                    onSuccess(count)
+                },
+                onFailure = { err ->
+                    val msg = err.message ?: "خطأ في قراءة بيانات JSON للمشتريات"
+                    _userMessage.emit("فشل استيراد المشتريات: $msg")
+                    onError(msg)
+                }
+            )
+        }
+    }
+
+    // ==========================================
+    // PERSISTENT ACTIVE DRAFTS (SURVIVE APP SWITCHING & WHATSAPP)
+    // ==========================================
+
+    // Sales Invoice Draft (Image 1)
+    var showCreateSalesInvoiceDialog by mutableStateOf(false)
+    var draftSalesPartyId by mutableStateOf<String?>(null)
+    var draftSalesCustomerSearch by mutableStateOf("")
+    val draftSalesItems = mutableStateListOf<SalesItemDraftState>()
+    var draftSalesNotes by mutableStateOf("")
+    var draftSalesPaymentType by mutableStateOf("CREDIT") // "CREDIT", "CASH"
+    var draftSalesPaidMinor by mutableStateOf(0L)
+
+    fun persistCurrentSalesDraft() {
+        try {
+            SalesDraftManager.saveDraft(
+                context = getApplication(),
+                isOpen = showCreateSalesInvoiceDialog,
+                partyId = draftSalesPartyId,
+                customerSearch = draftSalesCustomerSearch,
+                items = draftSalesItems.toList(),
+                notes = draftSalesNotes,
+                paymentType = draftSalesPaymentType,
+                paidMinor = draftSalesPaidMinor
+            )
+        } catch (e: Exception) {
+            // ignore
+        }
+    }
+
+    fun openNewSalesInvoiceDraft(initialPartyId: String? = null, defaultPackage: CardPackageEntity? = null) {
+        if (draftSalesPartyId == null && initialPartyId != null) {
+            draftSalesPartyId = initialPartyId
+        }
+        if (draftSalesItems.isEmpty()) {
+            draftSalesItems.add(
+                SalesItemDraftState(
+                    packageId = defaultPackage?.id,
+                    packageName = defaultPackage?.name ?: "باقة كروت",
+                    quantity = 10,
+                    unitPriceMinor = defaultPackage?.wholesalePriceMinor ?: 10000L,
+                    retailPriceMinor = defaultPackage?.retailPriceMinor ?: 20000L
+                )
+            )
+        }
+        showCreateSalesInvoiceDialog = true
+        persistCurrentSalesDraft()
+    }
+
+    fun dismissSalesInvoiceDialog() {
+        showCreateSalesInvoiceDialog = false
+        persistCurrentSalesDraft()
+    }
+
+    fun clearSalesInvoiceDraft() {
+        showCreateSalesInvoiceDialog = false
+        draftSalesPartyId = null
+        draftSalesCustomerSearch = ""
+        draftSalesItems.clear()
+        draftSalesNotes = ""
+        draftSalesPaymentType = "CREDIT"
+        draftSalesPaidMinor = 0L
+        SalesDraftManager.clearDraft(getApplication())
+    }
+
+    fun cloneSalesInvoiceToDraft(doc: DocumentEntity) {
+        viewModelScope.launch {
+            try {
+                val items = db.documentItemDao().getItemsForDocument(doc.id)
+                draftSalesPartyId = doc.partyId
+                draftSalesCustomerSearch = ""
+                draftSalesNotes = "مستنسخة من فاتورة #${doc.docNumber}"
+                draftSalesPaymentType = "CREDIT"
+                draftSalesPaidMinor = 0L
+                draftSalesItems.clear()
+
+                if (items.isNotEmpty()) {
+                    items.forEach { itm ->
+                        draftSalesItems.add(
+                            SalesItemDraftState(
+                                packageId = itm.packageId,
+                                packageName = itm.description,
+                                quantity = itm.quantity,
+                                unitPriceMinor = itm.unitPriceMinor,
+                                retailPriceMinor = itm.unitPriceMinor * 2
+                            )
+                        )
+                    }
+                } else {
+                    draftSalesItems.add(
+                        SalesItemDraftState(
+                            packageId = null,
+                            packageName = "كروت إنترنت",
+                            quantity = 10,
+                            unitPriceMinor = 10000L,
+                            retailPriceMinor = 20000L
+                        )
+                    )
+                }
+                showCreateSalesInvoiceDialog = true
+                persistCurrentSalesDraft()
+                _userMessage.emit("تم استنساخ الفاتورة #${doc.docNumber} بنجاح إلى مسودة التحرير")
+            } catch (e: Exception) {
+                _userMessage.emit("فشل استنساخ الفاتورة: ${e.message}")
+            }
+        }
+    }
+
+    // Manual Card Stock Addition Draft (Image 3)
+    var showAddManualCardsDialog by mutableStateOf(false)
+    var draftAddCardsPackageId by mutableStateOf<String?>(null)
+    var draftAddCardsCategoryName by mutableStateOf("")
+    var draftAddCardsQuantity by mutableStateOf(100)
+    var draftAddCardsRetailPriceMinor by mutableStateOf(100000L)
+    var draftAddCardsWholesalePriceMinor by mutableStateOf(90000L)
+    var draftAddCardsNotes by mutableStateOf("")
+
+    fun openAddManualCardsDraft(defaultPackage: CardPackageEntity? = null) {
+        if (draftAddCardsPackageId == null && defaultPackage != null) {
+            draftAddCardsPackageId = defaultPackage.id
+            draftAddCardsCategoryName = defaultPackage.name
+            draftAddCardsRetailPriceMinor = defaultPackage.retailPriceMinor
+            draftAddCardsWholesalePriceMinor = defaultPackage.wholesalePriceMinor
+        }
+        showAddManualCardsDialog = true
+    }
+
+    fun clearAddManualCardsDraft() {
+        showAddManualCardsDialog = false
+        draftAddCardsPackageId = null
+        draftAddCardsCategoryName = ""
+        draftAddCardsQuantity = 100
+        draftAddCardsRetailPriceMinor = 100000L
+        draftAddCardsWholesalePriceMinor = 90000L
+        draftAddCardsNotes = ""
+    }
+}
+
+data class SalesItemDraftState(
+    val id: String = UuidUtils.newTimeOrderedId(),
+    var packageId: String? = null,
+    var packageName: String = "",
+    var quantity: Int = 10,
+    var unitPriceMinor: Long = 0L,
+    var retailPriceMinor: Long = 0L,
+    var isService: Boolean = false
+) {
+    val lineTotalMinor: Long get() = quantity * unitPriceMinor
 }

@@ -148,7 +148,7 @@ fun SalesScreen(
                 }
 
                 FloatingActionButton(
-                    onClick = { showNewInvoiceSheet = true },
+                    onClick = { viewModel.openNewSalesInvoiceDraft(defaultPackage = packages.firstOrNull()) },
                     containerColor = MaterialTheme.colorScheme.secondary,
                     modifier = Modifier.testTag("fab_new_invoice")
                 ) {
@@ -320,22 +320,15 @@ fun SalesScreen(
         )
     }
 
-    // New Multi-Line Invoice Sheet
-    if (showNewInvoiceSheet) {
-        NewInvoiceBottomSheet(
+    // New Multi-Line Invoice Dialog (2026 Style - Survives app switching & WhatsApp)
+    if (viewModel.showCreateSalesInvoiceDialog) {
+        CreateCardSalesInvoiceDialog(
+            viewModel = viewModel,
             parties = parties,
             packages = packages,
-            onDismiss = { showNewInvoiceSheet = false },
-            onSubmit = { partyId, cardItems, serviceItems, currency, rate, notes ->
-                viewModel.postSalesInvoice(
-                    partyId = partyId,
-                    cardItems = cardItems,
-                    serviceItems = serviceItems,
-                    currency = currency,
-                    exchangeRate = rate,
-                    notes = notes,
-                    onSuccess = { showNewInvoiceSheet = false }
-                )
+            onDismiss = { viewModel.showCreateSalesInvoiceDialog = false },
+            onSubmitSuccess = {
+                // Draft cleared inside dialog
             }
         )
     }

@@ -89,7 +89,7 @@ fun PackagesStockScreen(
         floatingActionButton = {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FloatingActionButton(
-                    onClick = { showReceiveStockSheet = true },
+                    onClick = { viewModel.openAddManualCardsDraft(packages.firstOrNull()) },
                     containerColor = SemanticIncomeGreen,
                     modifier = Modifier.testTag("fab_receive_stock")
                 ) {
@@ -251,13 +251,14 @@ fun PackagesStockScreen(
         )
     }
 
-    // Receive Stock Sheet
-    if (showReceiveStockSheet) {
-        ReceiveStockBottomSheet(
+    // Receive Stock Sheet (2026 Style - Survives app switching & WhatsApp)
+    if (viewModel.showAddManualCardsDialog) {
+        AddManualCardsCountDialog(
+            viewModel = viewModel,
             packages = packages,
-            onDismiss = { showReceiveStockSheet = false },
-            onSubmit = { pkgId, qty, notes ->
-                viewModel.receiveCardStock(pkgId, qty, notes) { showReceiveStockSheet = false }
+            onDismiss = { viewModel.showAddManualCardsDialog = false },
+            onSubmitSuccess = {
+                // Draft cleared inside dialog
             }
         )
     }

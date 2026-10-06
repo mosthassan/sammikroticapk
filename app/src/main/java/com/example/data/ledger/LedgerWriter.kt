@@ -729,6 +729,11 @@ class LedgerWriter(
             }
         }
 
+        // If purchase invoice was voided, remove registered fixed assets
+        if (doc.type == DocumentType.PURCHASE_INVOICE.name) {
+            db.assetDao().deleteAssetsByDocId(docId)
+        }
+
         recordAuditLog("DOCUMENT", docId, "VOID", doc.status, "Voided: $reason")
         if (enableInvariantValidation) invariants.verifyAll()
         true

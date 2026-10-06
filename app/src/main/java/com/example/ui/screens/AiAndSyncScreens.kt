@@ -350,7 +350,7 @@ fun AccountingAssistantTab(viewModel: AppViewModel) {
 @Composable
 fun InvoiceOcrTab(viewModel: AppViewModel) {
     val draftInvoice by viewModel.draftOcrInvoice.collectAsState()
-    var scannedText by remember {
+    var scannedText by rememberSaveable {
         mutableStateOf(
             """
             Starlink Internet Services
@@ -361,113 +361,259 @@ fun InvoiceOcrTab(viewModel: AppViewModel) {
             """.trimIndent()
         )
     }
+    var isCapexAsset by rememberSaveable { mutableStateOf(true) }
+    var invoiceNotes by rememberSaveable { mutableStateOf("فاتورة توريد معتمدة من OCR") }
     val scope = rememberCoroutineScope()
 
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
             .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        // Status banner (matching Image 2)
         item {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
-                shape = RoundedCornerShape(12.dp),
+            Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = ProfitEmerald.copy(alpha = 0.12f),
+                border = BorderStroke(1.dp, ProfitEmerald.copy(alpha = 0.5f)),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        "تحويل صورة / نص الفاتورة إلى مسودة مشتريات (OCR)",
-                        fontWeight = FontWeight.Bold,
-                        color = BrandCyanPrimary
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Default.AutoAwesome,
+                        contentDescription = null,
+                        tint = ProfitEmerald,
+                        modifier = Modifier.size(20.dp)
                     )
-                    Text(
-                        "يقوم الذكاء الاصطناعي باستخراج بنود المشتريات وعرضها كمسودة فقط. لا يتم ترحيل أي قيد إلى دفتر الأستاذ إلا بعد مراجعة واعتماد المحاسب صراحة.",
-                        fontSize = 11.sp,
-                        color = Color.LightGray,
-                        modifier = Modifier.padding(vertical = 4.dp)
-                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column {
+                        Text(
+                            "وكيل الذكاء الاصطناعي (Gemini Vision) جاهز ومفعل ✓",
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White,
+                            fontSize = 12.sp
+                        )
+                        Text(
+                            "تحويل وتعديل الفاتورة الذكية - استخراج وتعديل الأصناف والأسعار والاعتماد",
+                            color = TextSecondaryDark,
+                            fontSize = 10.5.sp
+                        )
+                    }
+                }
+            }
+        }
 
-                    OutlinedTextField(
-                        value = scannedText,
-                        onValueChange = { scannedText = it },
-                        label = { Text("النص المقروء من الفاتورة / السند") },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(110.dp),
-                        maxLines = 5
+        // CAPEX checkbox (matching Image 2)
+        item {
+            Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = CyberDarkCardElevated,
+                border = BorderStroke(1.dp, CyberBorder),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                ) {
+                    androidx.compose.material3.Checkbox(
+                        checked = isCapexAsset,
+                        onCheckedChange = { isCapexAsset = it },
+                        colors = androidx.compose.material3.CheckboxDefaults.colors(checkedColor = ProfitEmerald)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        "إضافة الأصناف إلى سجل الأصول الثابتة (CAPEX)",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                }
+            }
+        }
+
+        // Scanned text input
+        item {
+            Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = CyberDarkCardElevated,
+                border = BorderStroke(1.dp, CyberBorder),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Text(
+                        "نص الفاتورة الممسوحة أو المستخرجة من الكاميرا:",
+                        fontWeight = FontWeight.Bold,
+                        color = MikroTikCyan,
+                        fontSize = 12.sp
                     )
 
                     Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = scannedText,
+                        onValueChange = { scannedText = it },
+                        label = { Text("النص المقروء من الفاتورة / السند", fontSize = 11.sp) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(105.dp),
+                        maxLines = 5,
+                        shape = RoundedCornerShape(8.dp)
+                    )
+
+                    Spacer(modifier = Modifier.height(10.dp))
                     Button(
                         onClick = {
                             scope.launch {
                                 viewModel.scanInvoiceText(scannedText)
                             }
                         },
-                        colors = ButtonDefaults.buttonColors(containerColor = BrandCyanPrimary),
+                        colors = ButtonDefaults.buttonColors(containerColor = MikroTikPrimary),
+                        shape = RoundedCornerShape(8.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Icon(Icons.Default.AutoAwesome, contentDescription = null)
+                        Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("استخراج المسودة وتحليل البنود")
+                        Text("استخراج المسودة وتحليل البنود الذكي", fontWeight = FontWeight.Bold)
                     }
                 }
             }
         }
 
+        // Extracted items list (matching Image 2)
         if (draftInvoice != null) {
             val draft = draftInvoice!!
+
             item {
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    shape = RoundedCornerShape(12.dp),
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "الأصناف المستخرجة (${draft.items.size}):",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp,
+                        color = Color.White
+                    )
+                    Text(
+                        "درجة الدقة: ${(draft.totalConfidence * 100).toInt()}%",
+                        fontSize = 11.5.sp,
+                        color = ProfitEmerald,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
+
+            // Cards for each item
+            items(draft.items) { item ->
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = CyberDarkCardElevated,
+                    border = BorderStroke(1.dp, CyberBorder),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
+                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "صنف #${draft.items.indexOf(item) + 1}",
+                                color = MikroTikCyan,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 12.sp
+                            )
+                            Text(
+                                "الحساب: ${if (isCapexAsset) "أصول ثابتة (1501)" else item.accountCode}",
+                                fontSize = 10.5.sp,
+                                color = TextSecondaryDark
+                            )
+                        }
+
+                        Text(
+                            text = item.description,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White,
+                            fontSize = 12.5.sp
+                        )
+
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            Text("مسودة فاتورة المشتريات الناتجة", fontWeight = FontWeight.Bold, color = SemanticWarningAmber)
-                            Text("درجة الثقة: ${(draft.totalConfidence * 100).toInt()}%", fontSize = 12.sp, color = SemanticIncomeGreen)
-                        }
-
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text("المورد المقترح: ${draft.suggestedVendorName} (ثقة ${(draft.vendorConfidence * 100).toInt()}%)")
-                        Text("المبلغ الإجمالي: ${draft.totalAmount.format()}")
-
-                        Spacer(modifier = Modifier.height(8.dp))
-                        draft.items.forEach { item ->
-                            Text("• ${item.description} - حساب: ${item.accountCode} - ${item.totalMinor / 100}$", fontSize = 12.sp)
-                        }
-
-                        if (draft.warnings.isNotEmpty()) {
-                            Spacer(modifier = Modifier.height(8.dp))
-                            draft.warnings.forEach { w ->
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.Warning, contentDescription = null, tint = SemanticExpenseRed, modifier = Modifier.size(14.dp))
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text(w, fontSize = 11.sp, color = SemanticExpenseRed)
-                                }
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Button(
-                            onClick = {
-                                viewModel.approveAndPostDraftInvoice(draft) {
-                                    // posted
-                                }
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = SemanticIncomeGreen),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Icon(Icons.Default.CheckCircle, contentDescription = null)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("اعتماد وترحيل الفاتورة رسمياً إلى الأستاذ")
+                            Text("الكمية: ${item.quantity}", fontSize = 11.5.sp, color = TextSecondaryDark)
+                            Text(
+                                "الإجمالي: ${item.totalMinor / 100}$",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = ProfitEmerald
+                            )
                         }
                     }
+                }
+            }
+
+            // Approved total box & Notes (matching Image 2)
+            item {
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = CyberDarkSurface,
+                    border = BorderStroke(1.dp, MikroTikPrimary.copy(alpha = 0.4f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("المورد المقترح:", fontSize = 11.5.sp, color = TextSecondaryDark)
+                            Text(draft.suggestedVendorName, fontWeight = FontWeight.Bold, color = Color.White, fontSize = 12.sp)
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("إجمالي الفاتورة المعتمد:", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                            Text(
+                                draft.totalAmount.format(),
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = ProfitEmerald
+                            )
+                        }
+
+                        OutlinedTextField(
+                            value = invoiceNotes,
+                            onValueChange = { invoiceNotes = it },
+                            label = { Text("ملاحظات الفاتورة", fontSize = 11.sp) },
+                            singleLine = true,
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+            }
+
+            // Action: اعتماد وحفظ الفاتورة
+            item {
+                Button(
+                    onClick = {
+                        viewModel.approveAndPostDraftInvoice(draft) {}
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = ProfitEmerald),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("اعتماد وحفظ الفاتورة والأصناف في الأستاذ", fontWeight = FontWeight.Bold, fontSize = 12.5.sp)
                 }
             }
         }

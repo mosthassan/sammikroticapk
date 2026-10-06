@@ -45,9 +45,13 @@ import kotlinx.coroutines.launch
 import com.example.data.local.dao.SyncOutboxDao
 import com.example.data.local.dao.ConflictLogDao
 import com.example.data.local.dao.SyncStateDao
+import com.example.data.local.dao.NetworkDeviceDao
+import com.example.data.local.dao.NetworkSubnetSettingsDao
 import com.example.data.local.entity.SyncOutboxEntity
 import com.example.data.local.entity.ConflictLogEntity
 import com.example.data.local.entity.SyncStateEntity
+import com.example.data.local.entity.NetworkDeviceEntity
+import com.example.data.local.entity.NetworkSubnetSettingsEntity
 import androidx.room.migration.Migration
 
 @Database(
@@ -72,9 +76,11 @@ import androidx.room.migration.Migration
         IdempotencyKeyEntity::class,
         SyncOutboxEntity::class,
         ConflictLogEntity::class,
-        SyncStateEntity::class
+        SyncStateEntity::class,
+        NetworkDeviceEntity::class,
+        NetworkSubnetSettingsEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -96,6 +102,8 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun syncOutboxDao(): SyncOutboxDao
     abstract fun conflictLogDao(): ConflictLogDao
     abstract fun syncStateDao(): SyncStateDao
+    abstract fun networkDeviceDao(): NetworkDeviceDao
+    abstract fun networkSubnetSettingsDao(): NetworkSubnetSettingsDao
 
     companion object {
         const val DATABASE_NAME = "sammikrotik_accounting.db"
@@ -150,6 +158,68 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `network_devices` (
+                        `id` TEXT NOT NULL PRIMARY KEY,
+                        `name` TEXT NOT NULL,
+                        `deviceType` TEXT NOT NULL,
+                        `ipAddress` TEXT NOT NULL,
+                        `macAddress` TEXT NOT NULL,
+                        `locationArea` TEXT NOT NULL,
+                        `portOrInterface` TEXT NOT NULL,
+                        `frequencyOrSsid` TEXT NOT NULL,
+                        `model` TEXT NOT NULL,
+                        `username` TEXT NOT NULL,
+                        `status` TEXT NOT NULL,
+                        `signalDbm` INTEGER NOT NULL,
+                        `uptimeHours` INTEGER NOT NULL,
+                        `notes` TEXT NOT NULL,
+                        `createdAt` INTEGER NOT NULL
+                    )
+                """)
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_network_devices_ipAddress` ON `network_devices` (`ipAddress`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_network_devices_deviceType` ON `network_devices` (`deviceType`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_network_devices_status` ON `network_devices` (`status`)")
+
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `network_subnet_settings` (
+                        `id` TEXT NOT NULL PRIMARY KEY,
+                        `approvedDeviceSubnet` TEXT NOT NULL,
+                        `gatewayIp` TEXT NOT NULL,
+                        `ipRangeStart` TEXT NOT NULL,
+                        `ipRangeEnd` TEXT NOT NULL,
+                        `hotspotSubnet` TEXT NOT NULL,
+                        `hotspotGatewayIp` TEXT NOT NULL,
+                        `dnsServers` TEXT NOT NULL,
+                        `isProtectionEnabled` INTEGER NOT NULL,
+                        `updatedAt` INTEGER NOT NULL
+                    )
+                """)
+
+                db.execSQL("""
+                    INSERT OR IGNORE INTO `network_subnet_settings` (
+                        `id`, `approvedDeviceSubnet`, `gatewayIp`, `ipRangeStart`, `ipRangeEnd`, 
+                        `hotspotSubnet`, `hotspotGatewayIp`, `dnsServers`, `isProtectionEnabled`, `updatedAt`
+                    ) VALUES (
+                        'GLOBAL_SUBNET_SETTINGS', '192.168.88.0/24', '192.168.88.1', '192.168.88.2', '192.168.88.254',
+                        '10.5.50.0/24', '10.5.50.1', '8.8.8.8, 1.1.1.1', 1, ${System.currentTimeMillis()}
+                    )
+                """)
+
+                db.execSQL("""
+                    INSERT OR IGNORE INTO `network_devices` (
+                        `id`, `name`, `deviceType`, `ipAddress`, `macAddress`, `locationArea`, 
+                        `portOrInterface`, `frequencyOrSsid`, `model`, `username`, `status`, `signalDbm`, `uptimeHours`, `notes`, `createdAt`
+                    ) VALUES (
+                        'DEV_DEFAULT_ROUTER', 'سيرفر الميكروتك الرئيسي CCR2004', 'MikroTik RouterBOARD', '192.168.88.1', 
+                        '6C:3B:6B:11:22:33', 'غرفة التحكم المركزية', 'sfp-plus1', 'N/A', 'MikroTik CCR2004-16G-2S+', 'admin', 'ONLINE', -45, 1420, 'الراوتر الرئيسي لإدارة الاشتراكات وتوزيع السرعات', ${System.currentTimeMillis()}
+                    )
+                """)
+            }
+        }
+
         @Volatile
         private var INSTANCE: AppDatabase? = null
 
@@ -165,7 +235,7 @@ abstract class AppDatabase : RoomDatabase() {
                 AppDatabase::class.java,
                 DATABASE_NAME
             )
-                .addMigrations(MIGRATION_1_2)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                 .addCallback(DatabaseCallback())
                 // Destructive migration is strictly forbidden
                 .build()
@@ -176,7 +246,7 @@ abstract class AppDatabase : RoomDatabase() {
                 context.applicationContext,
                 AppDatabase::class.java
             )
-                .addMigrations(MIGRATION_1_2)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                 .addCallback(DatabaseCallback())
                 .allowMainThreadQueries()
                 .build()
@@ -285,6 +355,26 @@ abstract class AppDatabase : RoomDatabase() {
             db.execSQL("""
                 INSERT OR IGNORE INTO currency_rates (id, fromCurrency, toCurrency, rateMicros, effectiveDateEpochDay, updatedAt)
                 VALUES ('RATE_SAR_YER', 'SAR', 'YER', 140000000, 20000, strftime('%s','now') * 1000)
+            """)
+
+            db.execSQL("""
+                INSERT OR IGNORE INTO `network_subnet_settings` (
+                    `id`, `approvedDeviceSubnet`, `gatewayIp`, `ipRangeStart`, `ipRangeEnd`, 
+                    `hotspotSubnet`, `hotspotGatewayIp`, `dnsServers`, `isProtectionEnabled`, `updatedAt`
+                ) VALUES (
+                    'GLOBAL_SUBNET_SETTINGS', '192.168.88.0/24', '192.168.88.1', '192.168.88.2', '192.168.88.254',
+                    '10.5.50.0/24', '10.5.50.1', '8.8.8.8, 1.1.1.1', 1, strftime('%s','now') * 1000
+                )
+            """)
+
+            db.execSQL("""
+                INSERT OR IGNORE INTO `network_devices` (
+                    `id`, `name`, `deviceType`, `ipAddress`, `macAddress`, `locationArea`, 
+                    `portOrInterface`, `frequencyOrSsid`, `model`, `username`, `status`, `signalDbm`, `uptimeHours`, `notes`, `createdAt`
+                ) VALUES (
+                    'DEV_DEFAULT_ROUTER', 'سيرفر الميكروتك الرئيسي CCR2004', 'MikroTik RouterBOARD', '192.168.88.1', 
+                    '6C:3B:6B:11:22:33', 'غرفة التحكم المركزية', 'sfp-plus1', 'N/A', 'MikroTik CCR2004-16G-2S+', 'admin', 'ONLINE', -45, 1420, 'الراوتر الرئيسي لإدارة الاشتراكات وتوزيع السرعات', strftime('%s','now') * 1000
+                )
             """)
         }
     }
